@@ -1,4 +1,5 @@
 import itertools
+import math
 from copy import deepcopy
 
 ids = ["111111111", "222222222"]
@@ -9,6 +10,7 @@ REFUEL_PENALTY = 10
 DROP_IN_DESTINATION_REWARD = 100
 INIT_TIME_LIMIT = 300
 TURN_TIME_LIMIT = 0.1
+
 
 def actions(state):
     def _is_pick_up_action_legal(pick_up_action):
@@ -28,6 +30,8 @@ def actions(state):
     def _is_drop_action_legal(drop_action):
         taxi_name = drop_action[1]
         passenger_name = drop_action[2]
+        if state["passengers"][passenger_name]["location"] != taxi_name:
+            return False
         # check same position
         if state['taxis'][taxi_name]['location'] != state['passengers'][passenger_name]['destination']:
             return False
@@ -63,8 +67,7 @@ def actions(state):
         if 0 <= x < rows and 0 <= y - 1 < cols and matrix[x][y - 1] != IMPASSABLE and fuel > 0:
             acts[taxi].append(("move", taxi, (x, y - 1)))
 
-        acts[taxi] += [("pick up", taxi, passenger) for passenger in passengers
-                       if _is_pick_up_action_legal(("pick up", taxi, passenger))]
+        acts[taxi].append(tuple(["wait", taxi]))
 
         for passenger in passengers:
             if _is_pick_up_action_legal(("pick up", taxi, passenger)):
@@ -84,7 +87,8 @@ def actions(state):
         if len(set(taxis_location_dict.values())) != len(taxis_location_dict):
             break
         res.append(tuple(action))
-    return res + ["reset", "terminate"]
+    return res
+
 class AbstractProblem:
     def __init__(self, an_input):
         """
@@ -152,6 +156,7 @@ class AbstractProblem:
         self.score -= RESET_PENALTY
         return
 
+
 def apply(state, action):
     def get_combinations(obj):
         "In this context it has all the passengers"
@@ -160,7 +165,8 @@ def apply(state, action):
             for subset in itertools.combinations(obj, L):
                 res.append(subset)
         return res
-    def _a(state, names):
+
+    def _apply_goal_change(state, names):
         " The goal must change"
         res = []
         prob = 1
@@ -170,23 +176,33 @@ def apply(state, action):
                 prob *= chng_goal_prob
             else:
                 prob *= (1 - chng_goal_prob)
+
         if not names:
             _state = deepcopy(state)
-            return [_state, prob]
-        _state = deepcopy(state)
+            _state["turns to go"] -= 1
+            return [[_state, prob]]
         goals = {passenger: state["passengers"][passenger]["possible_goals"] for passenger in names}
         for c in itertools.product(*goals.values()):
             _state = deepcopy(state)
             for pasg, new_goal in zip(names, c):
                 _state["passengers"][pasg]["destination"] = new_goal
-            res.append((_state, prob))
+            _state["turns to go"] -= 1
+            res.append([_state, prob])
         return res
+
     def _p(state):
         res = []
         _state = deepcopy(state)
         passengers = state["passengers"]
         for sub_pasg in get_combinations(passengers):
-            res += _a(state, sub_pasg)
+            res += _apply_goal_change(state, sub_pasg)
+        return res
+
+    def normalize_probs(list_states):
+        res = list_states
+        div = sum([p for _, p in res])
+        for i, _ in enumerate(res):
+            res[i][1] /= div
         return res
 
     """
@@ -195,17 +211,27 @@ def apply(state, action):
     NOTE:
     The states here differ in terms of goal changing and so
     """
+
     t = AbstractProblem(state)
     t.apply(action)
     new_state = t.state
     del t
-    return _p(new_state)
+    if action == "reset":
+        return [(new_state, 1.0)]
+    elif action == "terminate":
+        return []
+    res = _p(new_state)
+    # TODO check how state with goal changed but same destination should be dealt with
+    return normalize_probs(res)
 
 
 def reward(state, action):
     r = 0
+    if action is None:
+        return 0
     if action == "reset":
-        r += -50
+        return -50
+
     for atomic_action in action:
         act = atomic_action[0]
         if act == "drop off":
@@ -215,35 +241,93 @@ def reward(state, action):
     return r
 
 
-def VI(state, action, t):
-    policy = list(range(t))
+def VI(state):
+    state_value = {}
 
-    def value_iterations(state, action, t):
-        if t == 0:
-            return reward(state, action)
+    def value_iteration(state, action):
+        r = reward(state, action)
+        if state["turns to go"] == 0:
+            state_value[str(state)] = r
+            return r
+        if str(state) in state_value:
+            return state_value[str(state)]
 
-        max_val = 0
-        opt_act = None
+        max_val = -math.inf
         for act in actions(state):
-            temp = apply(state, act) # All the states and their probabilities
-            print(temp[1])
-            val = sum([l[1] * value_iterations(l[0], act, t-1) for l in temp])
-            if val > max_val:
-                max_val = val
-                opt_act = act
-        policy[t-1] = opt_act
-        return reward(state, action) + max_val
-    value_iterations(state, action, t)
-    return policy
+            # sum of probability times possible states
+            max_val = max(sum([pr * value_iteration(st, act) for st, pr in apply(state, act)]), max_val)
+
+        state_value[str(state)] = max_val + r
+        return max_val + r
+
+    # def value_iterations(state, action):
+    #     if str(state) in state_value:
+    #         return state_value[str(state)]
+    #     if state["turns to go"] < 0:
+    #         return 0
+    #
+    #     max_val = 0
+    #     acts = actions(state)
+    #     if not acts:
+    #         return 0
+    #     for act in acts:
+    #         temp = apply(state, act) # All the states and their probabilities
+    #         val = sum([l[1] * value_iterations(l[0], act) for l in temp])
+    #         if val > max_val:
+    #             max_val = val
+    #
+    #     r = 0
+    #     if action is not None:
+    #         r = reward(state, action)
+    #     state_value[str(state)] = r + max_val
+    #     return r + max_val
+    # value_iterations(state, action)
+    # for s in state_value.keys():
+    #     print(s)
+    # print("---")
+    value_iteration(state, None)
+    return state_value
+
+
+def get_action(state, state_value, prev_action):
+    def _dropped_off_all(action):
+        if action is None:
+            return False
+        for atom_action in action:
+            if atom_action[0] != "drop off":
+                return False
+        return True
+    if _dropped_off_all(prev_action):
+        return "reset"
+
+    max_val = -math.inf
+    opt_act = None
+    for act in actions(state):
+        # sum of probability times possible states
+        val = sum([pr * state_value[str(st)] for st, pr in apply(state, act)])
+        if val > max_val:
+            max_val = val
+            opt_act = act
+    return opt_act
 
 
 class OptimalTaxiAgent:
     def __init__(self, initial):
         self.initial = deepcopy(initial)
-        VI(self.initial, None, 100)
+        turns = initial["turns to go"]
+        self.state_value = VI(self.initial)
+        self.prev_action = None
+        print("Number of states: ", len(self.state_value.values()))
+        print(self.state_value[str(initial)])
 
     def act(self, state):
-        raise NotImplemented
+        self.prev_action = get_action(state, self.state_value, self.prev_action)
+        #print(state)
+        #print(actions(state))
+        print(self.prev_action, state["turns to go"])
+        print(state["taxis"]["taxi 1"]["location"])
+        print()
+        return self.prev_action
 
 
 class TaxiAgent:
@@ -252,3 +336,4 @@ class TaxiAgent:
 
     def act(self, state):
         raise NotImplemented
+
