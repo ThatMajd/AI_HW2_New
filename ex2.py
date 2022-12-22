@@ -134,36 +134,42 @@ def apply(state, action):
         return res
 
     def _apply_goal_change(state, names):
-        " The goal must change"
-        res = []
-        prob = 1
-        for passenger in state["passengers"]:
-            chng_goal_prob = state["passengers"][passenger]["prob_change_goal"]
-            if passenger in names:
-                prob *= chng_goal_prob
-            else:
-                prob *= (1 - chng_goal_prob)
+        pass
 
-        if not names:
-            _state = deepcopy(state)
-            #_state["turns to go"] -= 1
-            return [[_state, prob]]
-        goals = {passenger: state["passengers"][passenger]["possible_goals"] for passenger in names}
-        for c in itertools.product(*goals.values()):
-            _state = deepcopy(state)
-            for pasg, new_goal in zip(names, c):
-                _state["passengers"][pasg]["destination"] = new_goal
-            #_state["turns to go"] -= 1
-            res.append([_state, prob])
-        return res
+        #return [list(b) for b in res.items()]
 
     def _p(state):
-        res = []
+        res = {}
         _state = deepcopy(state)
         passengers = state["passengers"]
-        for sub_pasg in get_combinations(passengers):
-            res += _apply_goal_change(state, sub_pasg)
-        return res
+        # TODO should the probability of each goal be taken into consideration?
+        for names in get_combinations(passengers):
+            " The goal must change"
+
+            prob = 1
+            for passenger in state["passengers"]:
+                chng_goal_prob = state["passengers"][passenger]["prob_change_goal"]
+                len_goals = len(state["passengers"][passenger]["possible_goals"])
+                if passenger in names:
+                    prob *= chng_goal_prob * (1 / len_goals)
+                else:
+                    prob *= (1 - chng_goal_prob)
+
+            if not names:
+                _state = deepcopy(state)
+                res[str(_state)] = prob
+            else:
+                goals = {passenger: state["passengers"][passenger]["possible_goals"] for passenger in names}
+                for c in itertools.product(*goals.values()):
+                    _state = deepcopy(state)
+                    for pasg, new_goal in zip(names, c):
+                        _state["passengers"][pasg]["destination"] = new_goal
+                    k = str(_state)
+                    if k in res:
+                        res[k] += prob
+                    else:
+                        res[k] = prob
+        return [list(b) for b in res.items()]
 
     def normalize_probs(list_states):
         res = list_states
@@ -188,8 +194,7 @@ def apply(state, action):
     elif action == "terminate":
         return []
     res = _p(new_state)
-    # TODO check how state with goal changed but same destination should be dealt with
-    return normalize_probs(res)
+    return res #normalize_probs(res)
 
 
 def reward(state, action):
