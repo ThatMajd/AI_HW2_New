@@ -300,6 +300,7 @@ class OptimalTaxiAgent:
                 self.PI[t][str(s)] = opt_act
 
     def act(self, state):
+        # TODO THIS IS WRONG
         def _dropped_off_all(action):
             if action is None:
                 return False
@@ -308,7 +309,14 @@ class OptimalTaxiAgent:
                     return False
             return True
 
-        if _dropped_off_all(self.prev_action):
+        def temp(state):
+            for passenger in state["passengers"]:
+                loc, dest = state["passengers"][passenger]["location"], state["passengers"][passenger]["destination"]
+                if loc != dest:
+                    return False
+            return True
+
+        if temp(state):
             self.prev_action = "reset"
             return "reset"
 
