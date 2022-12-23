@@ -21,5 +21,5 @@ state = {
 
 a = {"A": 2, "B": 2}
 #print([list(b) for b in a.items()])
-for a in ex2.apply(state, [("move", "taxi 1", (1, 0))]):
+for a in ex2.apply(state, "reset"):
     print(a)

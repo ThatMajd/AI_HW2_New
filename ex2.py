@@ -19,6 +19,16 @@ def actions(state, matrix):
     rows = len(matrix)
     cols = len(matrix[0])
     acts = {}
+
+    def temp(state):
+        for passenger in state["passengers"]:
+            loc, dest = state["passengers"][passenger]["location"], state["passengers"][passenger]["destination"]
+            if loc != dest:
+                return False
+        return True
+    # if temp(state):
+    #     return ["reset"]
+
     for taxi in taxis:
         acts[taxi] = []
         taxi_loc = x, y = state["taxis"][taxi]["location"]
@@ -55,14 +65,14 @@ def actions(state, matrix):
         if len(set(taxis_location_dict.values())) != len(taxis_location_dict):
             break
         res.append(tuple(action))
-    return res
+    return res + ["reset", "terminate"]
 
 class AbstractProblem:
-    def __init__(self, an_input):
+    def __init__(self, an_input, init_state):
         """
         initiate the problem with the given input
         """
-        self.initial_state = deepcopy(an_input)
+        self.initial_state = deepcopy(init_state)
         self.state = deepcopy(an_input)
 
         self.score = 0
@@ -124,7 +134,7 @@ class AbstractProblem:
         return
 
 
-def apply(state, action):
+def apply(state, action, init_state):
     def get_combinations(obj):
         "In this context it has all the passengers"
         res = []
@@ -133,10 +143,6 @@ def apply(state, action):
                 res.append(subset)
         return res
 
-    def _apply_goal_change(state, names):
-        pass
-
-        #return [list(b) for b in res.items()]
 
     def _p(state):
         res = {}
@@ -171,13 +177,6 @@ def apply(state, action):
                         res[k] = prob
         return [list(b) for b in res.items()]
 
-    def normalize_probs(list_states):
-        res = list_states
-        div = sum([p for _, p in res])
-        for i, _ in enumerate(res):
-            res[i][1] /= div
-        return res
-
     """
     Given state and action, returns the states 
     after applying the action and the probability to get that state
@@ -185,10 +184,11 @@ def apply(state, action):
     The states here differ in terms of goal changing and so
     """
 
-    t = AbstractProblem(state)
+    t = AbstractProblem(state, init_state)
     t.apply(action)
     new_state = t.state
     del t
+
     if action == "reset":
         return [(new_state, 1.0)]
     elif action == "terminate":
@@ -292,7 +292,7 @@ class OptimalTaxiAgent:
                 for act in actions(s, matrix):
                     val = reward(s, act)
                     if t > 0:
-                        val += sum([p * self.V[t-1][str(state)] for state, p in apply(s, act)])
+                        val += sum([p * self.V[t-1][str(state)] for state, p in apply(s, act, self.initial)])
                     if val > max_val:
                         max_val = val
                         opt_act = act
@@ -316,9 +316,9 @@ class OptimalTaxiAgent:
                     return False
             return True
 
-        if temp(state):
-            self.prev_action = "reset"
-            return "reset"
+        # if temp(state):
+        #     self.prev_action = "reset"
+        #     return "reset"
 
         t = state["turns to go"] - 1
         temp_state = deepcopy(state)
@@ -328,7 +328,7 @@ class OptimalTaxiAgent:
 
         act = self.PI[t][str(temp_state)]
         self.prev_action = act
-        print(act)
+        #print(act)
         return act
 
 
