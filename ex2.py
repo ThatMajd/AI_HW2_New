@@ -2,8 +2,12 @@ import itertools
 import math
 from copy import deepcopy
 import time
+
+import utils
+
 ids = ["111111111", "222222222"]
 IMPASSABLE = "I"
+GAS = "G"
 
 RESET_PENALTY = 50
 REFUEL_PENALTY = 10
@@ -12,6 +16,24 @@ INIT_TIME_LIMIT = 300
 TURN_TIME_LIMIT = 0.1
 
 # TODO CHECK CAPACITY FOR LARGER PROBLEMS
+def dict_to_tuples(state):
+    res = []
+    # matrix
+    if type(state) == list and state and type(state[0]) == list:
+        r = []
+        for l in state:
+            r.append(tuple(l))
+        return tuple(r)
+    # reached the base case i.e. literal
+
+    if type(state) != dict:
+        if type(state) == list:
+            return tuple(state)
+        return state
+
+    for key in sorted(list(state.keys())):
+        res.append((key, dict_to_tuples(state[key])))
+    return tuple(res)
 
 def actions(state, matrix):
     taxis = state["taxis"]
@@ -19,15 +41,6 @@ def actions(state, matrix):
     rows = len(matrix)
     cols = len(matrix[0])
     acts = {}
-
-    def temp(state):
-        for passenger in state["passengers"]:
-            loc, dest = state["passengers"][passenger]["location"], state["passengers"][passenger]["destination"]
-            if loc != dest:
-                return False
-        return True
-    # if temp(state):
-    #     return ["reset"]
 
     for taxi in taxis:
         acts[taxi] = []
@@ -53,7 +66,7 @@ def actions(state, matrix):
 
         acts[taxi].append(tuple(["wait", taxi]))
 
-        if matrix[x][y] == 'G':
+        if matrix[x][y] == GAS:
             acts[taxi].append(("refuel", taxi))
 
     res = []
@@ -140,18 +153,15 @@ def apply(state, action, init_state):
         res = []
         for L in range(len(obj) + 1):
             for subset in itertools.combinations(obj, L):
-                res.append(subset)
-        return res
+                yield subset
+                #res.append(subset)
+        #return res
 
-
-    def _p(state):
+    def _apply_goal_change(state):
         res = {}
-        _state = deepcopy(state)
         passengers = state["passengers"]
-        # TODO should the probability of each goal be taken into consideration?
         for names in get_combinations(passengers):
             " The goal must change"
-
             prob = 1
             for passenger in state["passengers"]:
                 chng_goal_prob = state["passengers"][passenger]["prob_change_goal"]
@@ -163,19 +173,20 @@ def apply(state, action, init_state):
 
             if not names:
                 _state = deepcopy(state)
-                res[str(_state)] = prob
+                res[dict_to_tuples(_state)] = prob
             else:
                 goals = {passenger: state["passengers"][passenger]["possible_goals"] for passenger in names}
                 for c in itertools.product(*goals.values()):
                     _state = deepcopy(state)
                     for pasg, new_goal in zip(names, c):
                         _state["passengers"][pasg]["destination"] = new_goal
-                    k = str(_state)
+                    k = dict_to_tuples(_state)
                     if k in res:
                         res[k] += prob
                     else:
                         res[k] = prob
-        return [list(b) for b in res.items()]
+        a = [list(b) for b in res.items()]
+        return a
 
     """
     Given state and action, returns the states 
@@ -183,18 +194,34 @@ def apply(state, action, init_state):
     NOTE:
     The states here differ in terms of goal changing and so
     """
-
-    t = AbstractProblem(state, init_state)
-    t.apply(action)
-    new_state = t.state
-    del t
-
     if action == "reset":
-        return [(new_state, 1.0)]
+        return [(dict_to_tuples(deepcopy(init_state)), 1.0)]
     elif action == "terminate":
         return []
-    res = _p(new_state)
-    return res #normalize_probs(res)
+
+    new_state = deepcopy(state)
+
+    for atmoic_action in action:
+        act = atmoic_action[0]
+        taxi = atmoic_action[1]
+
+        if act == "move":
+            # update taxis and passengers on the taxi's location
+            new_state["taxis"][taxi]["location"] = atmoic_action[2]
+            new_state["taxis"][taxi]["fuel"] -= 1
+        elif act == "pick up":
+            passenger = atmoic_action[2]
+            new_state['taxis'][taxi]['capacity'] -= 1
+            new_state["passengers"][passenger]["location"] = taxi
+        elif act == "drop off":
+            passenger = atmoic_action[2]
+            new_state['taxis'][taxi]['capacity'] += 1
+            new_state["passengers"][passenger]["location"] = new_state["passengers"][passenger]["destination"]
+        elif act == "refuel":
+            new_state["taxis"][taxi]["fuel"] = init_state["taxis"][taxi]["fuel"]
+
+    res = _apply_goal_change(new_state)
+    return res
 
 
 def reward(state, action):
@@ -266,67 +293,49 @@ class OptimalTaxiAgent:
         self.turns = initial["turns to go"]
         del self.initial["turns to go"]
 
-        matrix = self.initial["map"]
+        self.matrix = self.initial["map"]
         del self.initial["optimal"]
         del self.initial["map"]
-        self.all_states = create_all_states(self.initial, matrix)
-        self.value_iteration(matrix)
+        self.all_states = create_all_states(self.initial, self.matrix)
+
+        self.value_iteration()
         print("finished VI")
-        print("Value of first state: ", self.V[self.turns-1][str(self.initial)])
+        print("Value of first state: ", self.V[self.turns-1][dict_to_tuples(self.initial)])
         end = time.perf_counter()
         print("Runtime took: ", end - start)
-        # file = open("policy.pkl", "wb")
-        # pickle.dump(self.PI, file)
-        # file.close()
+
         self.prev_action = None
 
-    def value_iteration(self, matrix):
+    def value_iteration(self):
         """ V is a T * |S| matrix (list of dicts), where t is turns, |S| is the number of states"""
-
         self.V = [dict() for _ in range(self.turns)]
         self.PI = [dict() for _ in range(self.turns)]
+        _acts = {dict_to_tuples(s): actions(s, self.matrix) for s in self.all_states}
+        _apply = {tuple([dict_to_tuples(state), act]): apply(state, act, self.initial)
+                  for state in self.all_states for act in actions(state, self.matrix)}
         for t in range(self.turns):
             for s in self.all_states:
                 max_val = -math.inf
                 opt_act = None
-                for act in actions(s, matrix):
+                for act in _acts[dict_to_tuples(s)]:
                     val = reward(s, act)
                     if t > 0:
-                        val += sum([p * self.V[t-1][str(state)] for state, p in apply(s, act, self.initial)])
+                        val += sum([p * self.V[t-1][state] for state, p in _apply[tuple([dict_to_tuples(s), act])]])
                     if val > max_val:
                         max_val = val
                         opt_act = act
-                self.V[t][str(s)] = max_val
-                self.PI[t][str(s)] = opt_act
+
+                self.V[t][dict_to_tuples(s)] = max_val
+                self.PI[t][dict_to_tuples(s)] = opt_act
 
     def act(self, state):
-        # TODO THIS IS WRONG
-        def _dropped_off_all(action):
-            if action is None:
-                return False
-            for atom_action in action:
-                if atom_action[0] != "drop off":
-                    return False
-            return True
-
-        def temp(state):
-            for passenger in state["passengers"]:
-                loc, dest = state["passengers"][passenger]["location"], state["passengers"][passenger]["destination"]
-                if loc != dest:
-                    return False
-            return True
-
-        # if temp(state):
-        #     self.prev_action = "reset"
-        #     return "reset"
-
         t = state["turns to go"] - 1
         temp_state = deepcopy(state)
         del temp_state["turns to go"]
         del temp_state["map"]
         del temp_state["optimal"]
 
-        act = self.PI[t][str(temp_state)]
+        act = self.PI[t][dict_to_tuples(temp_state)]
         self.prev_action = act
         #print(act)
         return act
@@ -335,6 +344,20 @@ class OptimalTaxiAgent:
 class TaxiAgent:
     def __init__(self, initial):
         self.initial = initial
+        for passenger in self.initial["passengers"]:
+            psg_loc = self.initial["passengers"][passenger]["location"]
+            psg_dst = self.initial["passengers"][passenger]["destination"]
+            if psg_loc != psg_dst:
+                dst = math.inf
+                closest_taxi = None
+                for taxi in self.initial["taxis"]:
+                    taxi_loc = self.initial["taxis"][taxi]["location"]
+                    if utils.distance(psg_loc, taxi_loc) < dst:
+                        closest_taxi = taxi
+                new_state = deepcopy(self.initial)
+                new_state["passengers"] = deepcopy(new_state["passengers"][passenger])
+                new_state["taxis"] = deepcopy(new_state["taxis"][taxi])
+                OptimalTaxiAgent(new_state)
 
     def act(self, state):
         raise NotImplemented
