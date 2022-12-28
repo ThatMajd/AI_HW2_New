@@ -346,23 +346,32 @@ def create_all_states(state, matrix):
     return res
 
 class OptimalTaxiAgent:
-    def __init__(self, initial):
+    def create_states(self):
+        self.all_states = create_all_states(self.initial, self.matrix)
+        return len(self.all_states)
+
+    def __init__(self, initial, optimal=True):
+        """
+        When calling the constructor in an optimal context, Value Iterations will start automatically
+        else the functions need to be called manually
+        """
         start = time.perf_counter()
         self.initial = deepcopy(initial)
         self.turns = initial["turns to go"]
-        del self.initial["turns to go"]
-
         self.matrix = self.initial["map"]
+
+        del self.initial["turns to go"]
         del self.initial["optimal"]
         del self.initial["map"]
-        self.all_states = create_all_states(self.initial, self.matrix)
 
-        self.value_iteration()
-        print("finished VI")
-        print("Value of first state: ", self.V[self.turns-1][dict_to_tuples(self.initial)])
-        end = time.perf_counter()
-        print("Runtime took: ", end - start)
+        if optimal:
+            print("There are a total of ", self.create_states(), " states")
+            self.value_iteration()
+            print("finished VI")
+            print("Value of first state: ", self.V[self.turns-1][dict_to_tuples(self.initial)])
 
+            end = time.perf_counter()
+            print("Runtime took: ", end - start)
 
         self.prev_action = None
 
@@ -404,8 +413,49 @@ class OptimalTaxiAgent:
 
 
 class TaxiAgent:
+    def reduce_state(self, in_state):
+        num_taxis = len(in_state["taxis"])
+        num_passengers = len(in_state["passengers"])
+        state = deepcopy(in_state)
+
+        if num_taxis > 1:
+            self.taxi = list(in_state["taxis"].keys())[0]
+            state["taxis"] = {self.taxi: in_state["taxis"][self.taxi]}
+        if num_passengers > 1:
+            self.psg = list(self.initial["passengers"].keys())[0]
+            state["passengers"] = {self.psg: in_state["passengers"][self.psg]}
+        self.add_Impassables(state)
+        return state
+
+    def add_Impassables(self, state):
+        matrix = state["map"]
+        for taxi in self.initial["taxis"]:
+            if taxi != self.taxi:
+                x, y = self.initial["taxis"][taxi]["location"]
+                matrix[x][y] = IMPASSABLE
+        state["map"] = matrix
+
     def __init__(self, initial):
+        print("Non optimal!!")
         self.initial = initial
+        state = self.reduce_state(self.initial)
+
+        self.optimalAgent = OptimalTaxiAgent(state)
+        print("Finished initial")
+
+    def act_padding(self, act):
+        taxis = self.initial["taxis"]
+        acting_taxi = self.taxi
+        res = []
+        for taxi in taxis:
+            if taxi is acting_taxi:
+                res.append(act[0])
+            else:
+                res.append(("wait", taxi))
+        return tuple(res)
 
     def act(self, state):
-        raise NotImplementedError
+        _state = self.reduce_state(state)
+        act = self.act_padding(self.optimalAgent.act(_state))
+        print(act)
+        return act

@@ -21,7 +21,7 @@ state = {
         "optimal": True,
         "map": [['P', 'P', 'P'],
                 ['P', 'G', 'P'],
-                ['P', 'P', 'P-']],
+                ['P', 'P', 'P']],
         "taxis": {'taxi 1': {"location": (0, 0), "fuel": 10, "capacity": 1}},
         "passengers": {'Dana': {"location": (2, 2), "destination": (0, 0),
                                 "possible_goals": ((0, 0), (2, 2)), "prob_change_goal": 0.1}},
@@ -84,6 +84,13 @@ def create_all_states_2(state, matrix):
             res.append(s)
     return res
 
-print(len(create_all_states_2(state, state["map"])))
-for a in create_all_states_2(state, state["map"]):
-    print(a)
+def test(s):
+    matrix = state["map"]
+    for taxi in state["taxis"]:
+        if taxi != "p":
+            x, y = state["taxis"][taxi]["location"]
+            matrix[x][y] = 'I'
+    state["map"] = matrix
+print(state)
+test(state)
+print(state)
