@@ -241,6 +241,53 @@ def reward(state, action):
     return r
 
 
+# def create_all_states(state, matrix):
+#     def _possible_tiles(n,m, matrix):
+#         res = []
+#         for i in range(n):
+#             for j in range(m):
+#                 if matrix[i][j] != 'I':
+#                     res.append((i, j))
+#         return res
+#     """
+#     Generates all possible states, assumes state given has no 'turns to go' key
+#     """
+#     n = len(matrix)
+#     m = len(matrix[0])
+#
+#     res = []
+#
+#     for taxi in state["taxis"]:
+#         for taxi_loc in _possible_tiles(n, m, matrix):
+#             for f in range(state["taxis"][taxi]["fuel"] + 1):
+#
+#                 _tmp_locs = {} # A set the contains all the current locations of the passengers up to this point
+#                 for passenger in state["passengers"]:
+#                     all_psg_locs = list(set(
+#                         [state["passengers"][passenger]["location"]] + list(state["taxis"].keys())
+#                         + list(state["passengers"][passenger]["possible_goals"])))
+#
+#                     for psg_loc in all_psg_locs:
+#                         for dst in set(tuple([state["passengers"][passenger]["destination"]]) +
+#                                        state["passengers"][passenger]["possible_goals"]):
+#                             st = deepcopy(state)
+#                             st["taxis"][taxi]["location"] = taxi_loc
+#                             st["taxis"][taxi]["fuel"] = f
+#                             st["passengers"][passenger]["location"] = psg_loc
+#                             st["passengers"][passenger]["destination"] = dst
+#                             num_in_taxi = {}
+#                             for psg in st["passengers"]:
+#                                 p_loc = st["passengers"][psg]["location"]
+#                                 #print(p_loc, type(p_loc) == str)
+#                                 if type(p_loc) is str:
+#                                     if p_loc not in num_in_taxi:
+#                                         num_in_taxi[p_loc] = 0
+#                                     num_in_taxi[p_loc] += 1
+#                             for t in num_in_taxi.keys():
+#                                 st["taxis"][t]["capacity"] -= num_in_taxi[t]
+#                             res.append(st)
+#
+#     return res
 def create_all_states(state, matrix):
     def _possible_tiles(n,m, matrix):
         res = []
@@ -255,36 +302,48 @@ def create_all_states(state, matrix):
     n = len(matrix)
     m = len(matrix[0])
 
-    res = []
-
-    for taxi in state["taxis"]:
-        for taxi_loc in _possible_tiles(n, m, matrix):
-            for f in range(state["taxis"][taxi]["fuel"] + 1):
-                for passenger in state["passengers"]:
-                    all_psg_locs = list(set(
-                        [state["passengers"][passenger]["location"]] + list(state["taxis"].keys())
-                        + list(state["passengers"][passenger]["possible_goals"])))
-                    for psg_loc in all_psg_locs:
-                        for dst in set(tuple([state["passengers"][passenger]["destination"]]) +
+    # Taxis
+    a = [(taxi, state["taxis"][taxi]["fuel"]) for taxi in state["taxis"]]
+    comb_taxis = {}
+    for t, fuel in a:
+        comb_taxis[t] = []
+        for f in range(fuel+1):
+            for loc in _possible_tiles(n, m, matrix):
+                comb_taxis[t].append([f, loc])
+    comb_passengers = {}
+    for passenger in state["passengers"]:
+        comb_passengers[passenger] = []
+        all_psg_locs = list(set(
+            [state["passengers"][passenger]["location"]] + [state["passengers"][passenger]["destination"]]
+            + list(state["taxis"].keys())
+            + list(state["passengers"][passenger]["possible_goals"])
+        ))
+        for loc in all_psg_locs:
+            for dst in set(tuple([state["passengers"][passenger]["destination"]]) +
                                        state["passengers"][passenger]["possible_goals"]):
-                            st = deepcopy(state)
-                            st["taxis"][taxi]["location"] = taxi_loc
-                            st["taxis"][taxi]["fuel"] = f
-                            st["passengers"][passenger]["location"] = psg_loc
-                            st["passengers"][passenger]["destination"] = dst
-                            num_in_taxi = {}
-                            for psg in st["passengers"]:
-                                p_loc = st["passengers"][psg]["location"]
-                                #print(p_loc, type(p_loc) == str)
-                                if type(p_loc) is str:
-                                    if p_loc not in num_in_taxi:
-                                        num_in_taxi[p_loc] = 0
-                                    num_in_taxi[p_loc] += 1
-                            for t in num_in_taxi.keys():
-                                st["taxis"][t]["capacity"] -= num_in_taxi[t]
-                            res.append(st)
+                comb_passengers[passenger].append([loc, dst])
+    res = []
+    for t in itertools.product(*comb_passengers.values()):
+        for k in itertools.product(*comb_taxis.values()):
+            s = {}
+            s["passengers"] = {}
+            s["taxis"] = {}
+            num_in_taxi = {taxi: state["taxis"][taxi]["capacity"] for taxi in state["taxis"]}
+            for passenger, (_loc, _dst) in zip(state["passengers"], t):
+                if isinstance(_loc, str):
+                    num_in_taxi[_loc] -= 1
+                s["passengers"][passenger] = {
+                    "location": _loc,
+                    "destination": _dst,
+                    'possible_goals': state["passengers"][passenger]["possible_goals"],
+                    'prob_change_goal': state["passengers"][passenger]["prob_change_goal"],
+                }
+            for taxi, (_f, _loc) in zip(state["taxis"], k):
+                s["taxis"][taxi] = {
+                    'location': _loc, 'fuel': _f, 'capacity': num_in_taxi[taxi]
+                }
+            res.append(s)
     return res
-
 
 class OptimalTaxiAgent:
     def __init__(self, initial):
@@ -304,6 +363,7 @@ class OptimalTaxiAgent:
         end = time.perf_counter()
         print("Runtime took: ", end - start)
 
+
         self.prev_action = None
 
     def value_iteration(self):
@@ -313,20 +373,22 @@ class OptimalTaxiAgent:
         _acts = {dict_to_tuples(s): actions(s, self.matrix) for s in self.all_states}
         _apply = {tuple([dict_to_tuples(state), act]): apply(state, act, self.initial)
                   for state in self.all_states for act in actions(state, self.matrix)}
+        #print("---", end - start)
         for t in range(self.turns):
             for s in self.all_states:
                 max_val = -math.inf
                 opt_act = None
-                for act in _acts[dict_to_tuples(s)]:
+                _s = dict_to_tuples(s)
+                for act in _acts[_s]:
                     val = reward(s, act)
                     if t > 0:
-                        val += sum([p * self.V[t-1][state] for state, p in _apply[tuple([dict_to_tuples(s), act])]])
+                        val += sum([p * self.V[t-1][state] for state, p in _apply[tuple([_s, act])]])
                     if val > max_val:
                         max_val = val
                         opt_act = act
 
-                self.V[t][dict_to_tuples(s)] = max_val
-                self.PI[t][dict_to_tuples(s)] = opt_act
+                self.V[t][_s] = max_val
+                self.PI[t][_s] = opt_act
 
     def act(self, state):
         t = state["turns to go"] - 1
@@ -344,20 +406,6 @@ class OptimalTaxiAgent:
 class TaxiAgent:
     def __init__(self, initial):
         self.initial = initial
-        for passenger in self.initial["passengers"]:
-            psg_loc = self.initial["passengers"][passenger]["location"]
-            psg_dst = self.initial["passengers"][passenger]["destination"]
-            if psg_loc != psg_dst:
-                dst = math.inf
-                closest_taxi = None
-                for taxi in self.initial["taxis"]:
-                    taxi_loc = self.initial["taxis"][taxi]["location"]
-                    if utils.distance(psg_loc, taxi_loc) < dst:
-                        closest_taxi = taxi
-                new_state = deepcopy(self.initial)
-                new_state["passengers"] = deepcopy(new_state["passengers"][passenger])
-                new_state["taxis"] = deepcopy(new_state["taxis"][taxi])
-                OptimalTaxiAgent(new_state)
 
     def act(self, state):
-        raise NotImplemented
+        raise NotImplementedError
