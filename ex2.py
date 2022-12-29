@@ -241,53 +241,6 @@ def reward(state, action):
     return r
 
 
-# def create_all_states(state, matrix):
-#     def _possible_tiles(n,m, matrix):
-#         res = []
-#         for i in range(n):
-#             for j in range(m):
-#                 if matrix[i][j] != 'I':
-#                     res.append((i, j))
-#         return res
-#     """
-#     Generates all possible states, assumes state given has no 'turns to go' key
-#     """
-#     n = len(matrix)
-#     m = len(matrix[0])
-#
-#     res = []
-#
-#     for taxi in state["taxis"]:
-#         for taxi_loc in _possible_tiles(n, m, matrix):
-#             for f in range(state["taxis"][taxi]["fuel"] + 1):
-#
-#                 _tmp_locs = {} # A set the contains all the current locations of the passengers up to this point
-#                 for passenger in state["passengers"]:
-#                     all_psg_locs = list(set(
-#                         [state["passengers"][passenger]["location"]] + list(state["taxis"].keys())
-#                         + list(state["passengers"][passenger]["possible_goals"])))
-#
-#                     for psg_loc in all_psg_locs:
-#                         for dst in set(tuple([state["passengers"][passenger]["destination"]]) +
-#                                        state["passengers"][passenger]["possible_goals"]):
-#                             st = deepcopy(state)
-#                             st["taxis"][taxi]["location"] = taxi_loc
-#                             st["taxis"][taxi]["fuel"] = f
-#                             st["passengers"][passenger]["location"] = psg_loc
-#                             st["passengers"][passenger]["destination"] = dst
-#                             num_in_taxi = {}
-#                             for psg in st["passengers"]:
-#                                 p_loc = st["passengers"][psg]["location"]
-#                                 #print(p_loc, type(p_loc) == str)
-#                                 if type(p_loc) is str:
-#                                     if p_loc not in num_in_taxi:
-#                                         num_in_taxi[p_loc] = 0
-#                                     num_in_taxi[p_loc] += 1
-#                             for t in num_in_taxi.keys():
-#                                 st["taxis"][t]["capacity"] -= num_in_taxi[t]
-#                             res.append(st)
-#
-#     return res
 def create_all_states(state, matrix):
     def _possible_tiles(n,m, matrix):
         res = []
@@ -413,49 +366,167 @@ class OptimalTaxiAgent:
 
 
 class TaxiAgent:
-    def reduce_state(self, in_state):
-        num_taxis = len(in_state["taxis"])
-        num_passengers = len(in_state["passengers"])
-        state = deepcopy(in_state)
+    def reduce_state(self, state):
+        _state = deepcopy(state)
 
-        if num_taxis > 1:
-            self.taxi = list(in_state["taxis"].keys())[0]
-            state["taxis"] = {self.taxi: in_state["taxis"][self.taxi]}
-        if num_passengers > 1:
-            self.psg = list(self.initial["passengers"].keys())[0]
-            state["passengers"] = {self.psg: in_state["passengers"][self.psg]}
-        self.add_Impassables(state)
-        return state
+        if "passenger" in self.picked:
+            psg = self.picked["passenger"]
+            _state["passengers"] = {psg: state["passengers"][psg]}
+        if "taxi" in self.picked:
+            tx = self.picked["taxi"]
+            _state["taxis"] = {tx: state["taxis"][tx]}
+            self.one_taxi = False
+        return _state
 
-    def add_Impassables(self, state):
+    def act_padding(self, act):
+        res = []
+        taxis = self.initial["taxis"]
+
+        # If there's one taxi this condition won't be met and the original action will be returned
+        if "taxi" in self.picked:
+            # There's more than one taxi
+            for taxi in taxis:
+                if taxi == self.picked["taxi"]:
+                    if isinstance(act, tuple):
+                        res.append(act[0])
+                        continue
+                    return act
+                else:
+                    res.append(("wait", taxi))
+        else:
+            return act
+        return tuple(res)
+
+    def add_impassable(self, state):
+        """
+        If there's more than one taxis, we want to avoid a colision so we set the location of other taxis as impassable
+        """
+        _state = deepcopy(state)
         matrix = state["map"]
         for taxi in self.initial["taxis"]:
-            if taxi != self.taxi:
+            if taxi != self.picked["taxi"]:
                 x, y = self.initial["taxis"][taxi]["location"]
                 matrix[x][y] = IMPASSABLE
-        state["map"] = matrix
+        _state["map"] = matrix
+        return _state
+
+    def pick_taxi_passenger(self, chng_tx=False, chng_psg=False):
+        def find_best_comb(state):
+            def man_dist(a, b):
+                return abs(a[0] - b[0]) + abs(a[1] - b[1])
+            def best_gas_station(loc1, loc2, gas, f):
+                _min = math.inf
+                best_gas = None
+                for g in gas:
+                    d1 = man_dist(loc1, g)
+                    d2 = man_dist(g, loc2)
+                    if d1 < f or d2 < f:
+                        continue
+                    if d1 + d2 < _min:
+                        _min = d1 + d2
+                        best_gas = g
+                return best_gas, _min
+
+            total = math.inf
+            taxis = state["taxis"]
+            passengers = state["passengers"]
+            matrix = state["map"]
+            gas_stations = [(r, c) for r, _ in enumerate(matrix) for c, _ in enumerate(matrix[0]) if
+                            matrix[r][c] == "G"]
+            res = None
+            for taxi in taxis:
+                moves = 0
+                taxi_loc = taxis[taxi]["location"]
+                fuel = taxis[taxi]["fuel"]
+                "Find closest passenger without refuel"
+                d1 = math.inf
+                closest_psg = None
+                for passenger in passengers:
+                    psg_loc = passengers[passenger]["location"]
+                    temp = man_dist(taxi_loc, psg_loc)
+                    # TODO check whether <= is needed
+                    if temp < fuel and temp < d1:
+                        d1 = temp
+                        closest_psg = passenger
+
+                if closest_psg is None:
+                    assert d1 is math.inf
+                    for passenger in passengers:
+                        gas, distance = best_gas_station(taxi_loc, passengers[passenger], gas_stations, fuel)
+                        if d1 > distance:
+                            d1 = distance
+
+                if d1 is math.inf:
+                    continue
+                moves += d1
+
+                if d1 > fuel:
+                    fuel -= d1 - fuel
+                else:
+                    fuel -= d1
+
+                destinations = set(tuple([state["passengers"][closest_psg]["destination"]])
+                                   + state["passengers"][closest_psg]["possible_goals"])
+                psg_loc = passengers[closest_psg]["location"]
+                d2 = math.inf
+                furthest = None
+                for dst in destinations:
+                    temp = man_dist(psg_loc, dst)
+                    if temp < d2 and temp < fuel:
+                        d2 = temp
+                        furthest = dst
+                if furthest is None:
+                    assert d2 is math.inf
+                    for dst in destinations:
+                        gas, distance = best_gas_station(psg_loc, dst, gas_stations, fuel)
+                        if d2 > distance:
+                            d2 = distance
+                if d2 is math.inf:
+                    continue
+                moves += d2
+
+                if moves < total:
+                    total = moves
+                    res = (taxi, closest_psg)
+            return res
+
+        if not bool(self.picked):
+            #d ict is empty
+            t, p = find_best_comb(self.initial)
+            self.picked["passenger"] = p
+            self.picked["taxi"] = t
+            # if len(self.psgs) > 1:
+            #     self.picked["passenger"] = self.psgs.pop()
+            # if len(self.txis) > 1:
+            #     self.picked["taxi"] = self.txis.pop()
+            return
+        # If there are no taxis or passengers left, the dict will contain empty values as intended
+        if chng_tx:
+            self.picked["taxi"] = self.txis.pop()
+        if chng_psg:
+            self.picked["passenger"] = self.psgs.pop()
 
     def __init__(self, initial):
-        print("Non optimal!!")
+        print("\tNon optimal!!")
         self.initial = initial
+        self.picked = {}
+        self.one_taxi = True
+        self.score = 0
+        self.psgs = list(self.initial["passengers"].keys())
+        self.txis = list(self.initial["taxis"].keys())
+        self.pick_taxi_passenger()
         state = self.reduce_state(self.initial)
-
+        #print(state)
+        if not self.one_taxi:
+            state = self.add_impassable(state)
+        #print(state)
         self.optimalAgent = OptimalTaxiAgent(state)
         print("Finished initial")
 
-    def act_padding(self, act):
-        taxis = self.initial["taxis"]
-        acting_taxi = self.taxi
-        res = []
-        for taxi in taxis:
-            if taxi is acting_taxi:
-                res.append(act[0])
-            else:
-                res.append(("wait", taxi))
-        return tuple(res)
-
     def act(self, state):
-        _state = self.reduce_state(state)
-        act = self.act_padding(self.optimalAgent.act(_state))
-        print(act)
+        reduced_state = self.reduce_state(state)
+        act = self.act_padding(self.optimalAgent.act(reduced_state))
+        self.score += reward(None, act)
+        #print(self.score)
+        #print(act)
         return act
